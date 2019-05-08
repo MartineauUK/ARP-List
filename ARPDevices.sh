@@ -1,13 +1,13 @@
 #!/bin/sh
-VER="v01.02"
-#======================================================================================================= © 2016-2018 Martineau, v1.02
+VER="v01.03"
+#======================================================================================================= © 2016-2019 Martineau, v1.03
 #
 # Check if ARP cache is valid for expected devices.
 #
 #     ARPDevices
 #                  List ARP cache
 #                  e.g.
-#                       Warning may take up to 60secs to resolve ARP
+#                       Warning may take upto 60secs to resolve ARP
 #                       10.88.8.12  c4:xx:xx:xx:xx:xx   TL-SG2008-Bed1  (TL-SG2008-Bed1.Martineau.lan)
 #                       10.88.8.100 <incomplete>        N/A             (EeeBox.Martineau.lan)
 #                       <snip>
@@ -17,12 +17,14 @@ VER="v01.02"
 #                       Records CNT=19 TAGGED=18
 #
 #                       .......took 3 seconds
-
 #
 #     ARPDevices   refresh
 #                  If '/jffs/scripts/Reset_NVRAM-DHCPstatic.sh' exists; contents will be used as a ping target(s)
 #                  otherwise
 #                  NVRAM variable dhcp_staticlist will be used as a ping target(s)
+#
+# To clear ARP cache use:
+#		ip neigh flush all 
 #
 
 #
@@ -62,6 +64,8 @@ ANSIColours () {
 
 }
 
+Main() { true; }			# Syntax that is Atom Shellchecker compatible!
+
 ANSIColours
 
 # Provide assistance
@@ -89,16 +93,16 @@ if [ "$1" == "refresh" ];then
         nvram get dhcp_staticlist | sed 's/</\n</g' > $NVRAM_FN
 
     fi
-        CNT=$(cat "$NVRAM_FN" | grep -v "^#" | grep -Fc "<" )
+        CNT=$(grep -v "^#" "$NVRAM_FN" | grep -Fc "<" )
         echo -e $cBCYA"\n\t"$VER "PING ARP refresh: may take up to" $CNT "secs if ALL are not ONLINE! (1 second per IP) using '$NVRAM_FN'\n"
 
         CNT=
         start=`date +%s`
 
-        for IP in $(cat "$NVRAM_FN" | grep -v "^#" | grep -F "<" | awk ' BEGIN {FS=">" } {print $2}')
+        for IP in $(grep -v "^#" "$NVRAM_FN" | grep -F "<" | awk ' BEGIN {FS=">" } {print $2}')
             do
                 COLOR=$cBGRE
-                if [ ! -z "$(echo $IP | grep LAN_SUBNET)" ];then
+                if [ -n "$(echo $IP | grep LAN_SUBNET)" ];then
                     IP=${LAN_SUBNET}.${IP##*\.}
                 fi
                 ping -q -c1 -w1 $IP 2>&1 >/dev/null
@@ -117,7 +121,7 @@ if [ "$1" == "refresh" ];then
 fi
 
 if [ -z "$1" ];then
-    echo -e $cBYEL"\n\t"$VER "ARP cache report - Warning may take up to 60secs to resolve ARP\n\n"
+    echo -e $cBYEL"\n\t"$VER "ARP cache report - Warning may take upto 60secs to resolve ARP\n\n"
 else
     echo -e $cBCYA"\n\t"$VER "ARP cache report"
 fi
@@ -137,10 +141,11 @@ start=`date +%s`
 #           10.88.8.31       0x1         0x2         d0:xx:xx:xx:xx:xx     *        br0
 
 # Check if counts match
-if [ $(wc -l  </etc/hosts.dnsmasq) -ne $(grep -cE "^dhcp-host" /etc/dnsmasq.conf) ];then
-    echo -e $cRED"\n\t\a**Warning: Number of '/etc/hosts.dnsmasq' entries does not match number of 'dhcp-host' entries in '/etc/dnsmasq.conf'"$cRESET
+if [ -f /etc/hosts.dnsmasq ];then
+	if [ $(wc -l  </etc/hosts.dnsmasq) -ne $(grep -cE "^dhcp-host" /etc/dnsmasq.conf) ];then
+		echo -e $cRED"\n\t\a**Warning: Number of '/etc/hosts.dnsmasq' entries does not match number of 'dhcp-host' entries in '/etc/dnsmasq.conf'"$cRESET
+	fi
 fi
-
 
 arp -a | awk '{print $2","$4","$1}' | tr -d '()' | sort -n -t . -k 1,1 -k 2,2 -k 3,3 -k 4,4 | while read ARP_DEVICE
 do
@@ -151,6 +156,9 @@ do
     # Match MAC with what we have in /etc/ethers -> /etc/hosts.dnsmasq to get a valid description
     # Device must be defined in DHCP table :-(
     Parse $ARP_DEVICE "," ARP_IP ARP_MAC ARP_DESC
+	if [ $CNT -eq 0 ];then
+		LASTOCTECT1=$(echo $ARP_IP | awk ' FS="." {print $1}')
+	fi
     DESC="N/A\t"
     if [ "$ARP_MAC" != "<incomplete>" ];then
         if [ "$ARP_DESC" != "?" ];then
@@ -162,21 +170,23 @@ do
             # Instead /etc/dnsmasq.conf contains
             #         dhcp-host=00:xx:xx:xx:xx:xx,10.88.8.254
             FN="/etc/dnsmasq.conf"
-            if [ "$(grep -i "$ARP_MAC" "$FN" | awk ' FS="," {print $2}' | wc -l)" -gt 1 ];then
-                echo -e $cRED"\a*Duplicate*\t"$ARP_MAC"\tFOUND in '"$FN"' ???; Following description may be INVALID"$cBMAG
-            fi
-            if [ ! -z "$(grep -i "$ARP_MAC" "$FN" | awk ' FS="," {print $2}')" ];then
-                DESC=$(grep -i "$(grep -i "$ARP_MAC" "$FN" | awk ' FS=","{print $2}')\b" /etc/hosts.dnsmasq | awk '{print $2}')
-                if [ -z "$DESC" ];then
-                    DESC="N/A\t"
-                else
-                    if [ "${#DESC}" -lt 8 ];then
-                        DESC=$DESC"\t"                  # Cosmetic tabular formatting!
-                    fi
-                fi
-            fi
+				if [ "$(grep -i "$ARP_MAC" "$FN" | awk ' FS="," {print $2}' | wc -l)" -gt 1 ];then
+					echo -e $cRED"\a*Duplicate*\t"$ARP_MAC"\tFOUND in '"$FN"' ???; Following description may be INVALID"$cBMAG
+				fi
+				if [ -n "$(grep -i "$ARP_MAC" "$FN" | awk ' FS="," {print $2}')" ];then
+					DESC=$(grep -i "$(grep -i "$ARP_MAC" "$FN" | awk ' FS=","{print $2}')\b" /etc/hosts.dnsmasq | awk '{print $2}')
+						if [ "${#DESC}" -lt 8 ];then
+							DESC=$DESC"\t"                  # Cosmetic tabular formatting!
+						fi
+				else
+					if [ "$DESC" == "N/A\t" ];then
+						[ "$ARP_IP" == "$(nvram get wan0_gateway)" ] && { DESC="WAN0 Gateway"; LINECOLOR=$cBYEL; }
+						
+						[ -z "$DESC" ] && DESC="N/A\t"
+					fi
+				fi
         else
-            if [ ! -z $(grep -i "$ARP_MAC" "$FN" | awk '{print $2}') ];then
+            if [ -n $(grep -i "$ARP_MAC" "$FN" | awk '{print $2}') ];then
                 DESC=$(grep -i "$(grep -i "$ARP_MAC" "$FN" | awk '{print $2}')\b" /etc/hosts.dnsmasq | awk '{print $2}')
                 if [ -z "$DESC" ];then
                     DESC="N/A\t"
@@ -193,13 +203,20 @@ do
 
     CNT=$((CNT+1))
 
-    if [ -z "$(echo "$ARP_IP" | grep "^$OCTET1")" ];then
-        echo -e $cBYEL
-        HACK=1                                                      # Tacky!.... variables not available outside of do loop????
-    fi
-    echo -e $ARP_IP"\t"$ARP_MAC"\t"$DESC"\t("$ARP_DESC")"
+	# If the current subnet prefix has changed assumed it is the WAN, so print summary
+	if [ "$LASTOCTECT1" != "$(echo $ARP_IP | awk ' FS="." {print $1}')" ];then
+		if [ -n "$(echo $(nvram get wans_dualwan) | grep "none")" ];then
+			echo -e $cBYEL
+			HACK=1                                                  # Tacky!.... variables not available outside of do loop????
+		else
+			printf "\n"
+		fi
+	fi
+    echo -e ${LINECOLOR}$ARP_IP"\t"$ARP_MAC"\t"$DESC"\t("$ARP_DESC")"
+	LINECOLOR=$cBMAG
+	LASTOCTECT1=$(echo "$ARP_IP" | awk ' FS="." {print $1}')
     if [ $HACK -eq 1 ];then
-        echo -e "\nRecords CNT="$CNT "TAGGED="$TAGGED               # Tacky!.... variables not available outside of do loop????
+        echo -e "\nRecords CNT="$CNT "TAGGED="$TAGGED             # Tacky!.... variables not available outside of do loop????
     fi
     DESC=
 done
